@@ -1212,6 +1212,33 @@ static void tsf_voice_calcpitchratio(struct tsf_voice* v, float pitchShift, floa
 	v->pitchOutputFactor = v->region->sample_rate / (tsf_timecents2Secsd(v->region->pitch_keycenter * 100.0) * outSampleRate);
 }
 
+static inline float tsf_interpolate_hermite(float *input, TSF_BOOL isLooping, unsigned int loopStart, unsigned int loopEnd, unsigned int regionEnd, float position) {
+	// Compute 4 positions around the sample point
+	// Need to account for looping and end of region
+	// Truncate position to int to get pos0
+	unsigned int pos0 = (unsigned int)position;
+	// pos1 is pos0 increment by 1
+	unsigned int pos1 = isLooping ? (pos0 >= loopEnd ? loopStart : pos0 + 1) : (pos0 + 1 == regionEnd ? pos0 : pos0 + 1);
+	// pos_1 is pos0 decremented by 1
+	unsigned int pos_1 = (pos0 == loopStart && isLooping ? loopEnd : pos0 == 0 ? 0 : pos0 - 1);
+	// pos2 is pos1 incremented by 1
+	unsigned int pos2 = isLooping ? (pos1 >= loopEnd ? loopStart : pos1 + 1) : (pos1 + 1 == regionEnd ? pos1 : pos1 + 1);
+
+	// Use Hermite polynomial for sample interpolation
+	// 4 point, 3rd order Hermite polynomial, x form
+	float y_1 = input[pos_1];
+	float y0 = input[pos0];
+	float y1 = input[pos1];
+	float y2 = input[pos2];
+	float c0 = y0;
+	float c1 = 0.5f * (y1 - y_1);
+	float c2 = y_1 - 2.5f * y0 + 2.0f * y1  - 0.5f * y2;
+	float c3 = 0.5f * (y2 - y_1) + 1.5f * (y0 - y1);
+	float x = (float)(position - pos0);
+	// Horner evaluation form
+	return ((c3 * x + c2) * x + c1) * x + c0;
+}
+
 static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, int numSamples)
 {
 	struct tsf_region* region = v->region;
@@ -1284,25 +1311,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 				gainLeft = gainMono * v->panFactorLeft, gainRight = gainMono * v->panFactorRight;
 				while (blockSamples-- && tmpSourceSamplePosition < tmpSampleEndDbl)
 				{
-					// Use Hermite polynomial for sample interpolation
-					// 4 point, 3rd order Hermite polynomial, x form
-					// Includes a single sample delay to avoid need to track y[-1] position.
-					unsigned int pos0 = (unsigned int)tmpSourceSamplePosition;
-					unsigned int pos1 = (pos0 >= tmpLoopEnd && isLooping ? tmpLoopStart : pos0 + 1);
-					unsigned int pos2 = (pos1 >= tmpLoopEnd && isLooping ? tmpLoopStart : pos1 + 1);
-					unsigned int pos3 = (pos2 >= tmpLoopEnd && isLooping ? tmpLoopStart : pos2 + 1);
-
-					float y_1 = input[pos0];
-					float y0 = input[pos1];
-					float y1 = input[pos2];
-					float y2 = input[pos3];
-					float c0 = y0;
-					float c1 = 1.0f / 2.0f * (y1 - y_1);
-					float c2 = y_1 - 5.0f / 2.0f * y0 + 2.0f * y1  - 1.0f / 2.0f * y2;
-					float c3 = 1.0f / 2.0f * (y2 - y_1) + 3.0f / 2.0f * (y0 - y1);
-					float x = (float)(tmpSourceSamplePosition - pos0);
-					float val = ((c3 * x + c2) * x + c1) * x + c0;
-
+					float val = tsf_interpolate_hermite(input, isLooping, tmpLoopStart, tmpLoopEnd, region->end, tmpSourceSamplePosition);
 					// Low-pass filter.
 					if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
 
