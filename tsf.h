@@ -1284,10 +1284,24 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 				gainLeft = gainMono * v->panFactorLeft, gainRight = gainMono * v->panFactorRight;
 				while (blockSamples-- && tmpSourceSamplePosition < tmpSampleEndDbl)
 				{
-					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
+					// Use Hermite polynomial for sample interpolation
+					// 4 point, 3rd order Hermite polynomial, x form
+					// Includes a single sample delay to avoid need to track y[-1] position.
+					unsigned int pos0 = (unsigned int)tmpSourceSamplePosition;
+					unsigned int pos1 = (pos0 >= tmpLoopEnd && isLooping ? tmpLoopStart : pos0 + 1);
+					unsigned int pos2 = (pos1 >= tmpLoopEnd && isLooping ? tmpLoopStart : pos1 + 1);
+					unsigned int pos3 = (pos2 >= tmpLoopEnd && isLooping ? tmpLoopStart : pos2 + 1);
 
-					// Simple linear interpolation.
-					float alpha = (float)(tmpSourceSamplePosition - pos), val = (input[pos] * (1.0f - alpha) + input[nextPos] * alpha);
+					float y_1 = input[pos0];
+					float y0 = input[pos1];
+					float y1 = input[pos2];
+					float y2 = input[pos3];
+					float c0 = y0;
+					float c1 = 1.0f / 2.0f * (y1 - y_1);
+					float c2 = y_1 - 5.0f / 2.0f * y0 + 2.0f * y1  - 1.0f / 2.0f * y2;
+					float c3 = 1.0f / 2.0f * (y2 - y_1) + 3.0f / 2.0f * (y0 - y1);
+					float x = (float)(tmpSourceSamplePosition - pos0);
+					float val = ((c3 * x + c2) * x + c1) * x + c0;
 
 					// Low-pass filter.
 					if (tmpLowpass.active) val = tsf_voice_lowpass_process(&tmpLowpass, val);
